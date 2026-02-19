@@ -1,0 +1,5 @@
+set_io tx IO_6
+set_io rx IO_9
+set_io led_blue IO_18
+set_io led_green IO_21
+set_io led_red IO_22
