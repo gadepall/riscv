@@ -1,0 +1,6 @@
+set_io leds[0]  IO_18   # Blue
+set_io leds[1]  IO_21   # Green
+set_io leds[2]  IO_22   # Red
+
+set_io tx       IO_44
+

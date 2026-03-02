@@ -1,0 +1,62 @@
+### LaTeX ###
+# Standard build artifacts
+*.aux
+*.log
+*.toc
+*.out
+*.fdb_latexmk
+*.fls
+*.synctex.gz
+# Bibliography
+*.bbl
+*.blg
+
+### Verilog / Digital Design ###
+# Simulation files (Icarus/ModelSim/Vivado)
+*.vvp
+*.vcd
+vsim.wlf
+*.jou
+*.log
+# FPGA build folders
+/runs/
+/obj_dir/
+/work/
+
+### Python ###
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+# Environments
+.venv/
+venv/
+env/
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+### C / C++ ###
+# Compiled Object files
+*.o
+*.obj
+# Precompiled Headers
+*.gch
+*.pch
+# Libraries
+*.lib
+*.a
+# Executables (Windows/Linux/macOS)
+*.exe
+*.out
+*.app
+
+### Assembly ###
+# Object and Listing files
+*.lst
+*.bin
+*.hex
+*.elf
+# Build artifacts specific to NASM/MASM
+*.obj

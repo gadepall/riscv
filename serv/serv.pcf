@@ -1,0 +1,9 @@
+# Clock (often handled by QL internal clock macro, but if external):
+# set_io clk <PIN_NUMBER>
+
+# LED (Green LED as per manual Page 83/84 snippet):
+set_io gpio_out IO_22
+
+# UART TX (Map to a header pin, e.g., IO_6):
+set_io uart_tx IO_6
+

@@ -1,0 +1,174 @@
+\documentclass[conference]{IEEEtran}
+\usepackage{graphicx}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{url}
+\usepackage{hyperref}
+\usepackage{tabularx}
+\usepackage{float}
+\usepackage{gvv}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{blue}\bfseries,
+  commentstyle=\color{green!40!black},
+  stringstyle=\color{red},
+  xleftmargin=1.5em,
+  frame=single,
+  breaklines=true,
+  breakatwhitespace=true,
+  tabsize=2,
+  showstringspaces=false,
+  captionpos=b,
+  keepspaces=true
+}
+
+\def\UrlBreaks{\do\/\do-\do_\do.}
+\title{RISC-V on small FPGAs}
+
+\author{
+\IEEEauthorblockN{Subhodeep Chakraborty and G.V.V. Sharma}
+\IEEEauthorblockA{
+Department of Electrical Engineering\\
+IIT Hyderabad\\
+Email: ee25btech11055@iith.ac.in, gadepall@ee.iith.ac.in}
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This paper presents a detailed case study on the implementation and optimisation of RISC-V soft-cores on a highly resource-constrained FPGA, the QuickLogic EOS S3, running on the Vaman LC-1 board. The primary objective is to create a functional system capable of running compiled C programs, eventually moving towards general-purpose computing on low-cost, open-source hardware. This document details the entire workflow, from initial design using the PicoRV32, FemtoRV32, and SERV cores with the open-source SymbiFlow toolchain, to the practical challenges of fitting them into a stringent 891 Logic Unit (LU) limit. The core of the paper details an aggressive optimization process for PicoRV32 over many iterations, through the use of specific techniques such as ``write snooping," ALU pruning, and firmware-level instruction optimization. Despite successfully reducing the logic footprint, the design ultimately failed at the routing stage, highlighting that raw logic utilization is not the sole barrier. The exploration of multiple cores reveals the critical role of the host system's ARM M4 core for system resource management. This work provides practical insights into the limitations of current tools and platforms for dense designs and documents a wide array of refinements necessary for success in this domain.
+\end{abstract}
+
+\begin{IEEEkeywords}
+RISC-V, FPGA, Soft Core, PicoRV32, FemtoRV32, SERV, Logic Optimization, Resource Constraints, SymbiFlow, SoC.
+\end{IEEEkeywords}
+
+\section{Introduction}
+The emergence of the open-standard RISC-V Instruction Set Architecture (ISA) has fundamentally shifted the landscape of computer architecture by providing a royalty-free, extensible alternative to proprietary designs \cite{riscv_spec}. This shift, coupled with the proliferation of low-cost Field-Programmable Gate Array (FPGA) technology, enables the development of bespoke hardware accelerators and System-on-Chip (SoC) architectures without the prohibitive licensing costs traditionally associated with silicon development. Consequently, there is an increasing demand for open-source, vendor-agnostic hardware ecosystems capable of supporting modular computing.
+
+However, implementing a functional CPU, even a minimal one, on entry-level FPGAs is a significant challenge. These devices are characterized by severe resource constraints, often offering only a few thousand Logic Units (LUs), a small amount of Block RAM (BRAM), and limited I/O pins. The primary challenge lies in fitting the entire SoC (comprising the CPU core, memory, and peripherals) within this tight logic budget while ensuring the design can be successfully routed and meet timing requirements.
+
+Several minimalist RISC-V cores have been developed to address this, such as the bit-serial SERV core \cite{serv_core}, the compact FemtoRV32 \cite{femtorv32_github}, and the highly configurable PicoRV32 \cite{picorv32_github}. While these cores are small, integrating them into a system capable of running general-purpose C code introduces significant overhead from memory interfaces, instruction decoding, and I/O logic, which often consume more resources than the core itself.
+
+This paper presents a practical case study of implementing these cores on the QuickLogic EOS S3 FPGA on the Vaman LC-1 board, a device with an extreme limit of just 891 LUs available for the fabric. Documented here is the systematic optimization required to transition from basic hardware verification to the execution of compiled C-based firmware. The main contributions of this work are:
+\begin{itemize}
+    \item A detailed account of the iterative optimization process required to shrink a RISC-V SoC, providing a comprehensive framework of techniques for resource-constrained environments.
+    \item An analysis of the practical limitations and inefficiencies of open-source synthesis tools when faced with highly dense and unconventional designs.
+    \item A demonstration of the ``routing wall," where a design that meets logic utilization quotas can still fail due to interconnect congestion.
+    \item A collection of hardware-specific and toolchain configurations required to successfully target the EOS S3 platform with different RISC-V cores.
+\end{itemize}
+
+\section{System Architecture and Toolchain}
+
+\subsection{Hardware Platform}
+The target for this project was the Vaman board, which features the QuickLogic EOS S3 SoC. This platform was chosen for its low cost and open-source toolchain support. The key constraints are summarized in \tabref{tab:platform_specs}. The most critical limitation for this work is the 891 available Logic Units (LUs) in the FPGA fabric.
+
+\begin{table}[H]
+\centering
+\caption{Target Platform Specifications}
+\label{tab:platform_specs}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabularx}{\columnwidth}{l X}
+\toprule
+\textbf{Component} & \textbf{Specification} \\
+\midrule
+Board & Vaman \\
+SoC & QuickLogic EOS-S3 (Pygmy) \\
+FPGA Fabric & eFPGA \\
+Logic Units (LUs) & 2400 (Documented), 891 (Available) \\
+CPU Core & ARM Cortex M4F (Hard IP) \\
+Toolchain & SymbiFlow (ql\_symbiflow) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{RISC-V Cores}
+Three different open-source RISC-V cores were selected for this study, each representing a different point in the size-performance spectrum:
+\begin{itemize}
+    \item \textbf{PicoRV32:} A highly configurable and popular core, chosen for its balance of features and size, as well as ease of access of documentation and resources.
+    \item \textbf{FemtoRV32:} A small core written in pure Verilog, with the 'Quark' variant being the smallest. Aims to be simple to understand and edit.
+    \item \textbf{SERV:} An award-winning bit-serial core, representing the absolute smallest possible RISC-V implementation at the cost of performance.
+\end{itemize}
+
+\subsection{Open-Source Toolchain and Environment}
+The entire project was developed using the open-source \verb|ql_symbiflow| framework, which uses Yosys for synthesis and VPR for Place and Route (PnR). The development environment was initially set up on a Linux laptop but was migrated to a Raspberry Pi 4 after a hardware failure. This migration introduced several practical challenges:
+\begin{itemize}
+    \item \textbf{Synthesis Quirks:} The Yosys synthesizer required specific, non-standard coding styles. For instance, declaring a loop variable \verb|integer i;| inside a Verilog \verb|initial| block caused a synthesis failure; the declaration had to be moved to the module level.
+    \item \textbf{Toolchain Errors:} The PnR stage would frequently terminate with a "Killed" message (error 137). This was traced to insufficient memory on the Raspberry Pi and could not be resolved by simply increasing swap size for the scope of the compilations being attempted, necessitating a switch back to a Linux environment.
+\end{itemize}
+
+\section{Phase 1: Baseline PicoRV32 Implementation}
+The first milestone was to verify that a minimal PicoRV32 core could produce a working design. The goal was a blinking LED program. A stripped-down RV32E (16-register) version of the core was instantiated, and a simple assembly loop was hardcoded into the FPGA's memory. This program used Memory-Mapped I/O (MMIO) to write to a GPIO pin connected to an LED. This success confirmed that the CPU was correctly fetching, decoding, and executing instructions, providing a vital baseline for more complex tasks.
+
+\section{Phase 2: Aggressive Optimization of PicoRV32}
+With the baseline established, the goal shifted to running a C program, which immediately collided with the 891 LU constraint. The initial design exceeded 2000 LUs, necessitating an aggressive, iterative optimization campaign.
+
+\subsection{Core and Feature Pruning}
+The first step was to disable all non-essential features in the PicoRV32 configuration, including counters, interrupts, and the multiplication/division unit. The barrel shifter was also disabled, forcing shift operations to be performed one bit at a time. To further save space, unused ALU operations (e.g., XOR, OR) and branch instructions were removed, allowing the synthesizer to prune the associated logic.
+
+\subsection{Memory Architecture and ``Write Snooping"}
+The largest source of logic bloat was memory. Adding an MMIO read port for the LED caused the synthesizer to infer a complex dual-port RAM from logic cells, consuming over 2000 LUs. The solution was a technique we call "write snooping":
+\begin{itemize}
+    \item The memory was kept as a simple, single-port RAM.
+    \item A separate 3-bit register, \verb|led_reg|, was created.
+    \item This register was updated \textit{only} when the CPU performed a write operation to the specific MMIO address for the LEDs (address 124).
+\end{itemize}
+This technique tricked the synthesizer into seeing the memory as a simple block while still allowing MMIO control, drastically reducing the LU count.
+
+\subsection{ROM Strategy and Firmware Optimization}
+Even with write snooping, implementing the memory in logic cells was too expensive. The tool refused to use dedicated BRAM for such a small array (128 bytes). The breakthrough was to abandon writable RAM entirely and convert the memory into a hardcoded Read-Only Memory (ROM) using a Verilog \verb|case| statement.
+
+This saved significant space but meant the program was fixed. To fit a meaningful C program into the tiny ROM, assembly-level optimizations were performed on the compiler's output. For example, an instruction sequence like \verb|lui a0, 0x20000| followed by \verb|sw a1, 0(a0)| was manually changed to \verb|sw a1, 64(zero)|, eliminating the \verb|lui| instruction and saving a precious word of memory.
+
+\subsection{Hardware-Specific Adaptations}
+Several non-standard configuration changes were necessary for the Vaman board:
+\begin{itemize}
+    \item \textbf{Internal Oscillator:} To resolve clocking errors, the design was switched from using an external clock pin to instantiating the EOS S3's internal oscillator macro (\verb|qlal4s3b_cell_macro|).
+    \item \textbf{Power-On Reset:} As the board's physical reset button did not correctly implement a long enough delay to allow for settling of Flip-Flops connected to the FPGA fabric, a 6-bit counter was implemented to generate a stable power-on reset pulse.
+    \item \textbf{Debug Heartbeats:} To verify operation without a full UART, a hardware ``heartbeat" was created by routing a high-order bit of a counter (\verb|counter[23]|) to an LED.
+\end{itemize}
+
+\subsection{The Routing Wall}
+After all optimizations, the final logic count was reduced to 890 LUs, however the compiler froze and crashed during the Place and Route (PnR) stage. The extreme logic density left virtually no free channels for the tool to route the necessary interconnects. This demonstrated that a design can meet area constraints on paper but be physically unrealizable due to routing congestion. On further iterations, a synchronous ROM setup was attempted, which pushed the logic count to 901 LUs. While this was extremely close to the 891 LU limit, the design ultimately failed as there seemed to be no further optimisations possible.
+
+\section{Exploration of Alternative Cores}
+The challenges with PicoRV32 prompted the exploration of other, smaller cores to see if they offered a more viable path.
+
+\subsection{FemtoRV32}
+The \verb|FemtoRV32-Quark| variant, having been reportedly implemented on small FPGAs as per the documentation, was targeted. The main effort involved creating a custom SoC wrapper (\verb|femtosoc.v|) to integrate the core. Key findings included:
+\begin{itemize}
+    \item \textbf{Primitive Removal:} All Lattice-specific primitives (e.g., \verb|SB_IO|) had to be removed.
+    \item \textbf{Active-Low LEDs:} The wrapper had to invert the logic for the LEDs, as the Vaman board's LEDs are active-low.
+    \item \textbf{M4 Clock Dependency:} It was discovered that the FPGA fabric clock is provided by the hard ARM M4 core. A specific M4 application (\verb|qorc_fpga_loader.bin|) had to be loaded first to enable the 20MHz clock for the RISC-V core.
+\end{itemize}
+However, the minimum number of LUs possible with this approach was 940, due to the fact that the ``small'' FPGAs that FemtoRV32 was built for were still many times bigger than ours, and the software, unlike PicoRV32, was not written with drastic manual optimisations in mind.
+
+\subsection{SERV}
+SERV, the bit-serial core, was the smallest option.% The \verb|SERVANT| reference SoC was used as a base.
+\begin{itemize}
+    \item \textbf{Core Configuration:} A custom \verb|serv_params.vh| file was created to configure the core with a minimal reset strategy and to disable all non-essential features like the MDU and compressed instruction support.
+    \item \textbf{Toolchain Pathing:} The build process was sensitive to file paths, requiring all source files to be consolidated into a single directory to resolve include errors.
+    \item \textbf{M4 Flashing Mode:} The board had to be flashed using the \verb|--mode m4-fpga| flag, which commands the M4 to initialize the system and enable the FPGA clock.
+\end{itemize}
+The SERV core was discovered to be a pure RISC-V core without any of the peripherals needed for a full SoC. The included reference SoC \verb|SERVANT| was written for the Lattice iCE boards, and would need heavy modifications to be adapted to the Quickfeather framework.
+
+\section{Discussion and Future Work}
+The case study highlights several critical lessons. First, for resource-constrained FPGAs, the interaction between RTL coding style and synthesizer behavior is highly intertwined. Techniques like ``write snooping" and manual ROM creation were essential workarounds for tool limitations. Second, raw LU count is a deceptive metric; routability is an equally important constraint. Finally, the study revealed the deep dependency on the EOS S3's hard M4 core for fundamental services like clock generation (and likely memory through the Wishbone based bus too), a critical factor for any design on this platform.
+
+The process of optimization also rendered the PicoRV32 core increasingly non-general-purpose. Disabling features and making firmware-specific optimizations move away from the goal of a standards-compliant processor.
+
+This experience suggests that for true general-purpose computing on such limited hardware, a radical change in approach may be needed. The limitation faced in implementing memory on the BRAM might be circumvented by interfacing with the M4 chip onboard the EOS S3. As the eFPGA we are working with was originally intended to act as a subsidiary to the M4, it may be possible to implement a custom framework to work in the reverse direction. Other than that, implementing an 8/16 bit-serial core from scratch for the Quickfeather platform is also a promising approach.
+
+\section{Conclusion}
+This paper chronicled the porting and optimization of several RISC-V soft cores on a highly resource-constrained FPGA. We successfully established a baseline working processor and then detailed an aggressive optimization campaign for PicoRV32, which, despite significant logic reduction, ultimately failed due to routing congestion. The exploration of FemtoRV32 and SERV revealed a recurring set of challenges related to toolchain quirks and a critical dependency on the board's hard-wired M4 core for clocking.
+
+The findings provide valuable, practical insights for designers, demonstrating that success requires a deep understanding of the toolchain, creative RTL workarounds, and an awareness that logic area is only one part of the puzzle. % While the single-chip goal proved unattainable without unacceptable compromises, the experience strongly motivates a shift towards multi-FPGA architectures as a promising path forward for building powerful, scalable, and truly general-purpose computing systems with open-source hardware.
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}

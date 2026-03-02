@@ -1,35 +1,27 @@
 module top (
-    // Note: 'clk' is REMOVED from the inputs!
     output wire tx,
     input wire rx,
     output wire led_blue,
     output wire led_green,
     output wire led_red
 );
-
-    // -----------------------------------------------------------------------
-    // INTERNAL CLOCK GENERATION (Fixes "IO_46 not found" error)
-    // -----------------------------------------------------------------------
+    // internal clock needed
     wire clk;
     
-    // This special primitive accesses the EOS S3 internal oscillator
+    // EOS S3 internal oscillator
     qlal4s3b_cell_macro u_qlal4s3b_cell_macro (
-        .Sys_Clk0 (clk),    // This gives us the System Clock
+        .Sys_Clk0 (clk),    // System Clock
         .Sys_Clk1 (),
         .Sys_Clk0_Rst (),
         .Sys_Clk1_Rst ()
     );
 
-    // -----------------------------------------------------------------------
-    // 1. Reset Logic
-    // -----------------------------------------------------------------------
+    // Reset
     reg [5:0] reset_cnt = 0;
     wire resetn = &reset_cnt;
     always @(posedge clk) reset_cnt <= reset_cnt + !resetn;
 
-    // -----------------------------------------------------------------------
-    // 2. Tiny Memory (32 Words)
-    // -----------------------------------------------------------------------
+    // Memoery
     parameter MEM_SIZE = 32;
     reg [31:0] mem [0:MEM_SIZE-1];
     
@@ -59,10 +51,14 @@ module top (
         end
     end
 
-    // -----------------------------------------------------------------------
-    // 3. CPU INSTANCE (Renamed to match your patched file)
-    // -----------------------------------------------------------------------
-    pico_opt cpu (
+    // CPU Instantiation
+    pico_opt #(
+        .ENABLE_REGS_16_31(0),
+        .ENABLE_MUL(0),
+        .ENABLE_DIV(0),
+        .ENABLE_IRQ(0),
+        .ENABLE_COUNTERS(0)
+    ) cpu (
         .clk       (clk),
         .resetn    (resetn),
         .mem_valid (mem_valid),
@@ -74,16 +70,15 @@ module top (
         .mem_rdata (mem_rdata)
     );
 
-    // -----------------------------------------------------------------------
-    // 4. Debug Heartbeat
-    // -----------------------------------------------------------------------
+    // Debug heartbeat
     reg [24:0] counter;
     always @(posedge clk) counter <= counter + 1;
-    
+
+   // Peripherals
     assign tx = counter[14]; 
     assign rx = 1'b1; 
     assign led_blue = counter[23];
-    assign led_green = counter[22]; 
-    assign led_red = counter[21];   
+    assign led_green = 1'b0; 
+    assign led_red = 1'b0;   
 
 endmodule
